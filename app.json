@@ -1,0 +1,57 @@
+{
+    "expo": {
+        "name": "SecureBank",
+        "slug": "securebank-mobile",
+        "version": "1.0.0",
+        "orientation": "portrait",
+        "icon": "./assets/icon.png",
+        "userInterfaceStyle": "automatic",
+        "splash": {
+            "image": "./assets/splash.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#1976d2"
+        },
+        "assetBundlePatterns": [
+            "**/*"
+        ],
+        "ios": {
+            "supportsTablet": true,
+            "bundleIdentifier": "com.securebank.mobile",
+            "infoPlist": {
+                "NSCameraUsageDescription": "This app uses the camera to scan QR codes for payments",
+                "NSFaceIDUsageDescription": "Enable biometric authentication for secure login"
+            }
+        },
+        "android": {
+            "adaptiveIcon": {
+                "foregroundImage": "./assets/adaptive-icon.png",
+                "backgroundColor": "#ffffff"
+            },
+            "package": "com.securebank.mobile",
+            "permissions": [
+                "android.permission.CAMERA",
+                "android.permission.USE_BIOMETRIC",
+                "android.permission.USE_FINGERPRINT"
+            ]
+        },
+        "web": {
+            "favicon": "./assets/favicon.png"
+        },
+        "plugins": [
+            "expo-local-authentication",
+            [
+                "expo-camera",
+                {
+                    "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera for QR code scanning"
+                }
+            ],
+            [
+                "expo-notifications",
+                {
+                    "icon": "./assets/notification-icon.png",
+                    "color": "#1976d2"
+                }
+            ]
+        ]
+    }
+}
