@@ -26,4 +26,4 @@ EXPOSE 4001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://localhost:4001/health || exit 1
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/index.js"]
