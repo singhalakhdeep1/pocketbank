@@ -1,329 +1,160 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { Avatar, Button, Chip, SegmentedButtons, Text } from 'react-native-paper';
+import { useFocusEffect } from '@react-navigation/native';
+import { AccountPicker, ConfirmDialog, Field, Screen, Section, useToast } from '@/components/ui';
+import type { MainScreenProps } from '@/navigation/types';
+import { bank } from '@/services/bank';
+import { useAppDispatch, useAppSelector } from '@/store';
+import { fetchAccounts } from '@/store/slices/accountsSlice';
+import { colors } from '@/theme';
+import type { Payee } from '@/types';
+import { money, parseAmount } from '@/utils/format';
 
-interface Contact {
-  id: string;
-  name: string;
-  avatar?: string;
-  accountNumber: string;
-}
-
-interface P2PTransfersProps {
-  userId: string;
-  balance: number;
-}
-
-export function P2PTransfers({ userId, balance }: P2PTransfersProps) {
-  const [amount, setAmount] = useState('');
-  const [recipient, setRecipient] = useState('');
+/** Send money to another PocketBank customer by account number or email. */
+export default function P2PTransfers({ route, navigation }: MainScreenProps<'P2PTransfers'>) {
+  const dispatch = useAppDispatch();
+  const accounts = useAppSelector((s) => s.accounts.accounts);
+  const [mode, setMode] = useState<'account' | 'email'>('account');
+  const [recipient, setRecipient] = useState(route.params?.accountNumber ?? '');
+  const [amount, setAmount] = useState(route.params?.amount ? String(route.params.amount) : '');
   const [note, setNote] = useState('');
-  const [recentContacts, setRecentContacts] = useState<Contact[]>([
-    { id: '1', name: 'John Doe', accountNumber: '****1234' },
-    { id: '2', name: 'Jane Smith', accountNumber: '****5678' },
-    { id: '3', name: 'Bob Johnson', accountNumber: '****9012' },
-  ]);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [from, setFrom] = useState<string | null>(null);
+  const [payees, setPayees] = useState<Payee[]>([]);
+  const [lookup, setLookup] = useState<{ name: string; isOwnAccount: boolean } | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
-  const handleTransfer = async () => {
-    if (!amount || !recipient) {
-      Alert.alert('Error', 'Please enter amount and recipient');
-      return;
-    }
+  useFocusEffect(
+    React.useCallback(() => {
+      void dispatch(fetchAccounts());
+      void bank.transfers.payees().then(setPayees).catch(() => undefined);
+    }, [dispatch]),
+  );
 
-    const transferAmount = parseFloat(amount);
-    if (transferAmount > balance) {
-      Alert.alert('Error', 'Insufficient balance');
-      return;
-    }
+  // Show who the money goes to before sending (masked name from the API).
+  useEffect(() => {
+    setLookup(null);
+    setLookupError(null);
+    const value = recipient.trim();
+    const ready = mode === 'account' ? /^\d{10}$/.test(value) : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    if (!ready) return;
+    const t = setTimeout(() => {
+      bank.transfers
+        .lookup(mode === 'account' ? { accountNumber: value } : { email: value })
+        .then((r) => setLookup(r))
+        .catch((e: Error) => setLookupError(e.message));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [recipient, mode]);
 
-    if (transferAmount <= 0) {
-      Alert.alert('Error', 'Please enter a valid amount');
-      return;
-    }
+  const source = accounts.find((a) => a.id === (from ?? accounts.find((x) => x.accountType === 'CHECKING')?.id ?? accounts[0]?.id));
+  const value = parseAmount(amount);
+  const tooMuch = Boolean(value && source && value > source.balance);
 
-    setIsProcessing(true);
-
+  const send = async () => {
+    if (!source || !value) return;
+    setBusy(true);
     try {
-      const response = await fetch('/api/transfers/p2p', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fromUserId: userId,
-          toAccount: recipient,
-          amount: transferAmount,
-          note,
-        }),
-      });
-
-      if (response.ok) {
-        Alert.alert('Success', 'Transfer completed successfully');
-        setAmount('');
-        setRecipient('');
-        setNote('');
-      } else {
-        Alert.alert('Error', 'Transfer failed');
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Network error');
+      const res = await bank.transfers.p2p({ fromAccountId: source.id, amount: value, note: note || undefined, ...(mode === 'account' ? { toAccount: recipient.trim() } : { toEmail: recipient.trim() }) });
+      setConfirm(false);
+      toast.show(`Sent ${money(value, source.currency)} to ${res.recipient.name}`);
+      setAmount('');
+      setNote('');
+      void dispatch(fetchAccounts());
+      setTimeout(() => navigation.goBack(), 1000);
+    } catch (err) {
+      setConfirm(false);
+      toast.show((err as Error).message);
     } finally {
-      setIsProcessing(false);
+      setBusy(false);
     }
-  };
-
-  const selectContact = (contact: Contact) => {
-    setRecipient(contact.accountNumber);
-  };
-
-  const formatCurrency = (value: string) => {
-    if (!value) return '';
-    const num = parseFloat(value.replace(/[^0-9.]/g, ''));
-    return num ? `$${num.toFixed(2)}` : '';
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Send Money</Text>
-
-      {/* Balance Card */}
-      <View style={styles.balanceCard}>
-        <Text style={styles.balanceLabel}>Available Balance</Text>
-        <Text style={styles.balanceAmount}>${balance.toFixed(2)}</Text>
-      </View>
-
-      {/* Amount Input */}
-      <View style={styles.inputSection}>
-        <Text style={styles.label}>Amount</Text>
-        <TextInput
-          style={styles.amountInput}
-          value={amount}
-          onChangeText={(text) => setAmount(text.replace(/[^0-9.]/g, ''))}
-          placeholder="$0.00"
-          keyboardType="decimal-pad"
+    <View style={{ flex: 1 }}>
+      <Screen testID="p2p">
+        <View style={styles.balance}>
+          <Text style={styles.balanceLabel}>Available</Text>
+          <Text style={styles.balanceValue}>{money(source?.balance ?? 0, source?.currency)}</Text>
+        </View>
+        <AccountPicker accounts={accounts} value={source?.id ?? null} onChange={setFrom} />
+        <SegmentedButtons
+          value={mode}
+          onValueChange={(v) => (setMode(v as typeof mode), setRecipient(''))}
+          buttons={[
+            { value: 'account', label: 'Account number', icon: 'pound' },
+            { value: 'email', label: 'Email', icon: 'email-outline' },
+          ]}
+          style={{ marginBottom: 12 }}
         />
-      </View>
-
-      {/* Recipient Input */}
-      <View style={styles.inputSection}>
-        <Text style={styles.label}>Recipient (Account Number)</Text>
-        <TextInput
-          style={styles.input}
+        <Field
+          label={mode === 'account' ? 'Recipient account number' : 'Recipient email'}
           value={recipient}
           onChangeText={setRecipient}
-          placeholder="Enter account number"
-          keyboardType="number-pad"
+          keyboardType={mode === 'account' ? 'number-pad' : 'email-address'}
+          autoCapitalize="none"
+          error={lookupError}
+          testID="p2p-recipient"
         />
-      </View>
-
-      {/* Note Input */}
-      <View style={styles.inputSection}>
-        <Text style={styles.label}>Note (Optional)</Text>
-        <TextInput
-          style={styles.input}
-          value={note}
-          onChangeText={setNote}
-          placeholder="Add a note"
-          multiline
-        />
-      </View>
-
-      {/* Recent Contacts */}
-      <View style={styles.contactsSection}>
-        <Text style={styles.sectionTitle}>Recent Contacts</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {recentContacts.map((contact) => (
-            <TouchableOpacity
-              key={contact.id}
-              style={styles.contactCard}
-              onPress={() => selectContact(contact)}
-            >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{contact.name[0]}</Text>
-              </View>
-              <Text style={styles.contactName}>{contact.name}</Text>
-              <Text style={styles.contactAccount}>{contact.accountNumber}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
-      {/* Quick Amount Buttons */}
-      <View style={styles.quickAmountSection}>
-        <Text style={styles.sectionTitle}>Quick Amount</Text>
-        <View style={styles.quickAmountButtons}>
-          {['$10', '$25', '$50', '$100'].map((value) => (
-            <TouchableOpacity
-              key={value}
-              style={styles.quickAmountButton}
-              onPress={() => setAmount(value.replace('$', ''))}
-            >
-              <Text style={styles.quickAmountText}>{value}</Text>
-            </TouchableOpacity>
+        {lookup ? (
+          <Chip icon={lookup.isOwnAccount ? 'account' : 'check-circle'} style={styles.lookup} testID="p2p-lookup">
+            {lookup.isOwnAccount ? 'This is your own account' : `Paying ${lookup.name}`}
+          </Chip>
+        ) : null}
+        <Field label="Amount" value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="decimal-pad" error={tooMuch ? 'Insufficient balance' : null} testID="p2p-amount" />
+        <View style={styles.quick}>
+          {[10, 25, 50, 100].map((v) => (
+            <Chip key={v} onPress={() => setAmount(String(v))} style={styles.quickChip}>
+              ${v}
+            </Chip>
           ))}
         </View>
-      </View>
+        <Field label="Note (optional)" value={note} onChangeText={setNote} />
 
-      {/* Transfer Button */}
-      <TouchableOpacity
-        style={[styles.transferButton, (!amount || !recipient || isProcessing) && styles.disabledButton]}
-        onPress={handleTransfer}
-        disabled={!amount || !recipient || isProcessing}
-      >
-        <Text style={styles.transferButtonText}>
-          {isProcessing ? 'Processing...' : 'Send Money'}
-        </Text>
-      </TouchableOpacity>
+        {payees.length ? (
+          <Section title="Recent contacts">
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {payees.map((p) => (
+                <Button key={p.id} onPress={() => (setMode('account'), setRecipient(p.accountNumber))} style={styles.contact} contentStyle={{ flexDirection: 'column' }} testID={`payee-${p.accountNumber}`}>
+                  <Avatar.Text size={40} label={p.name.split(' ').map((s) => s[0]).join('').slice(0, 2)} />
+                  {'\n'}
+                  {p.name.split(' ')[0]}
+                </Button>
+              ))}
+            </ScrollView>
+          </Section>
+        ) : null}
 
-      {/* Scan QR Button */}
-      <TouchableOpacity style={styles.qrButton}>
-        <Text style={styles.qrButtonText}>📷 Scan QR Code</Text>
-      </TouchableOpacity>
-    </ScrollView>
+        <Button mode="contained" icon="send" style={{ marginTop: 16 }} disabled={!value || !recipient || tooMuch || Boolean(lookupError)} onPress={() => setConfirm(true)} testID="p2p-submit">
+          Send money
+        </Button>
+        <Button icon="qrcode-scan" style={{ marginTop: 8 }} onPress={() => navigation.navigate('QRScan')}>
+          Scan a QR code instead
+        </Button>
+      </Screen>
+      <ConfirmDialog
+        visible={confirm}
+        title="Send money?"
+        body={`${money(value ?? 0, source?.currency)} to ${lookup?.name ?? recipient}${note ? `\n“${note}”` : ''}`}
+        confirmLabel="Send"
+        loading={busy}
+        onDismiss={() => setConfirm(false)}
+        onConfirm={send}
+      />
+      {toast.node}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 16,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 24,
-  },
-  balanceCard: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-  },
-  balanceLabel: {
-    color: 'white',
-    fontSize: 14,
-    opacity: 0.9,
-  },
-  balanceAmount: {
-    color: 'white',
-    fontSize: 32,
-    fontWeight: 'bold',
-    marginTop: 8,
-  },
-  inputSection: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  amountInput: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 24,
-    fontWeight: 'bold',
-    borderWidth: 2,
-    borderColor: '#3b82f6',
-  },
-  input: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-  },
-  contactsSection: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12,
-  },
-  contactCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 12,
-    marginRight: 12,
-    alignItems: 'center',
-    minWidth: 100,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#3b82f6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  avatarText: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  contactName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  contactAccount: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 2,
-  },
-  quickAmountSection: {
-    marginBottom: 24,
-  },
-  quickAmountButtons: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  quickAmountButton: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-  },
-  quickAmountText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  transferButton: {
-    backgroundColor: '#10b981',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  disabledButton: {
-    backgroundColor: '#d1d5db',
-  },
-  transferButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  qrButton: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-  },
-  qrButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-  },
+  balance: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, marginBottom: 12 },
+  balanceLabel: { color: '#dbeafe' },
+  balanceValue: { color: '#fff', fontSize: 26, fontWeight: 'bold' },
+  lookup: { alignSelf: 'flex-start', marginBottom: 8 },
+  quick: { flexDirection: 'row', marginBottom: 8 },
+  quickChip: { marginRight: 8 },
+  contact: { marginRight: 4 },
 });

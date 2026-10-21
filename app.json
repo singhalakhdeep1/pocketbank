@@ -1,57 +1,59 @@
 {
-    "expo": {
-        "name": "SecureBank",
-        "slug": "securebank-mobile",
-        "version": "1.0.0",
-        "orientation": "portrait",
-        "icon": "./assets/icon.png",
-        "userInterfaceStyle": "automatic",
-        "splash": {
-            "image": "./assets/splash.png",
-            "resizeMode": "contain",
-            "backgroundColor": "#1976d2"
-        },
-        "assetBundlePatterns": [
-            "**/*"
-        ],
-        "ios": {
-            "supportsTablet": true,
-            "bundleIdentifier": "com.securebank.mobile",
-            "infoPlist": {
-                "NSCameraUsageDescription": "This app uses the camera to scan QR codes for payments",
-                "NSFaceIDUsageDescription": "Enable biometric authentication for secure login"
-            }
-        },
-        "android": {
-            "adaptiveIcon": {
-                "foregroundImage": "./assets/adaptive-icon.png",
-                "backgroundColor": "#ffffff"
-            },
-            "package": "com.securebank.mobile",
-            "permissions": [
-                "android.permission.CAMERA",
-                "android.permission.USE_BIOMETRIC",
-                "android.permission.USE_FINGERPRINT"
-            ]
-        },
-        "web": {
-            "favicon": "./assets/favicon.png"
-        },
-        "plugins": [
-            "expo-local-authentication",
-            [
-                "expo-camera",
-                {
-                    "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera for QR code scanning"
-                }
-            ],
-            [
-                "expo-notifications",
-                {
-                    "icon": "./assets/notification-icon.png",
-                    "color": "#1976d2"
-                }
-            ]
-        ]
+  "expo": {
+    "name": "PocketBank",
+    "slug": "pocketbank",
+    "scheme": "pocketbank",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pocketbank.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "PocketBank uses the camera to scan QR codes for payments.",
+        "NSFaceIDUsageDescription": "PocketBank uses Face ID to unlock the app and confirm sensitive actions.",
+        "NSLocationWhenInUseUsageDescription": "PocketBank uses your location to find nearby ATMs and branches.",
+        "NSPhotoLibraryUsageDescription": "PocketBank lets you attach receipt photos to transactions."
+      }
+    },
+    "android": {
+      "package": "com.pocketbank.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1976d2"
+      },
+      "permissions": ["android.permission.CAMERA", "android.permission.USE_BIOMETRIC", "android.permission.USE_FINGERPRINT", "android.permission.ACCESS_COARSE_LOCATION"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "PocketBank"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#1976d2"
+        }
+      ],
+      ["expo-local-authentication", { "faceIDPermission": "PocketBank uses Face ID to unlock the app and confirm sensitive actions." }],
+      ["expo-camera", { "cameraPermission": "PocketBank uses the camera to scan QR codes for payments." }],
+      ["expo-notifications", { "icon": "./assets/notification-icon.png", "color": "#1976d2" }],
+      ["expo-location", { "locationWhenInUsePermission": "PocketBank uses your location to find nearby ATMs and branches." }],
+      ["expo-image-picker", { "photosPermission": "PocketBank lets you attach receipt photos to transactions." }],
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-status-bar",
+      ["@stripe/stripe-react-native", { "merchantIdentifier": "merchant.com.pocketbank.mobile", "enableGooglePay": false }]
+    ],
+    "extra": {
+      "eas": {}
     }
+  }
 }

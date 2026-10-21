@@ -1,22 +1,15 @@
 import React from 'react';
-import { createStackNavigator } from '@react-navigation/stack';
-import { useSelector } from 'react-redux';
-import { RootState } from '@/store';
+import { useAppSelector } from '@/store';
+import LockScreen from '@/screens/auth/LockScreen';
+import { Loading } from '@/components/ui';
 import AuthNavigator from './AuthNavigator';
 import MainNavigator from './MainNavigator';
 
-const Stack = createStackNavigator();
-
+/** Splash while restoring the session, then sign-in, the biometric lock, or the app. */
 export default function AppNavigator() {
-    const { isAuthenticated } = useSelector((state: RootState) => state.auth);
-
-    return (
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-            {!isAuthenticated ? (
-                <Stack.Screen name="Auth" component={AuthNavigator} />
-            ) : (
-                <Stack.Screen name="Main" component={MainNavigator} />
-            )}
-        </Stack.Navigator>
-    );
+  const { bootstrapped, isAuthenticated, locked } = useAppSelector((state) => state.auth);
+  if (!bootstrapped) return <Loading label="Starting PocketBank…" />;
+  if (!isAuthenticated) return <AuthNavigator />;
+  if (locked) return <LockScreen />;
+  return <MainNavigator />;
 }

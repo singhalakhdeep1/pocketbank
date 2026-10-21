@@ -1,30 +1,16 @@
-import api from './api';
+import { bank, type TxQuery } from './bank';
+import type { Page, Transaction } from '../types';
 
-export interface Transaction {
-    id: string;
-    type: string;
-    amount: number;
-    currency: string;
-    description: string;
-    status: string;
-    createdAt: string;
-}
+export type { Transaction };
 
 class TransactionService {
-    async getTransactions(accountId: string): Promise<Transaction[]> {
-        const response = await api.get(`/accounts/${accountId}/transactions`);
-        return response.data;
-    }
+  getTransactions(query: TxQuery = {}): Promise<Page<Transaction>> {
+    return bank.transactions.list({ limit: 30, ...query });
+  }
 
-    async createTransaction(data: {
-        accountId: string;
-        type: string;
-        amount: number;
-        description?: string;
-    }): Promise<Transaction> {
-        const response = await api.post('/transactions', data);
-        return response.data;
-    }
+  getAccountTransactions(accountId: string, query: TxQuery = {}) {
+    return this.getTransactions({ ...query, accountId });
+  }
 }
 
 export const transactionService = new TransactionService();

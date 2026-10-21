@@ -1,27 +1,19 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
-import { Card, Title, Text } from 'react-native-paper';
+import { IconButton } from 'react-native-paper';
+import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import type { CompositeScreenProps } from '@react-navigation/native';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { CardManager } from '@/components/CardManager';
+import type { MainStackParamList, TabParamList } from '@/navigation/types';
 
-export default function CardsScreen() {
-    return (
-        <View style={styles.container}>
-            <Card style={styles.card}>
-                <Card.Content>
-                    <Title>Credit & Debit Cards</Title>
-                    <Text>Your cards will be displayed here</Text>
-                </Card.Content>
-            </Card>
-        </View>
-    );
+type Props = CompositeScreenProps<BottomTabScreenProps<TabParamList, 'Cards'>, NativeStackScreenProps<MainStackParamList>>;
+
+/** Physical debit cards; virtual cards have their own screen (header button). */
+export default function CardsScreen({ navigation }: Props) {
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => <IconButton icon="credit-card-multiple-outline" iconColor="#fff" onPress={() => navigation.navigate('VirtualCard')} testID="open-virtual-cards" />,
+    });
+  }, [navigation]);
+  return <CardManager kind="PHYSICAL" />;
 }
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f5f5f5',
-        padding: 10,
-    },
-    card: {
-        elevation: 2,
-    },
-});

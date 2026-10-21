@@ -1,244 +1,105 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import { Card, Title, Paragraph, Button, Chip, ProgressBar } from 'react-native-paper';
-import { LineChart } from 'react-native-chart-kit';
-import { Dimensions } from 'react-native';
+import React from 'react';
+import { Dimensions, StyleSheet, View } from 'react-native';
+import { Button, Card, Chip, Text } from 'react-native-paper';
+import { LineChart, PieChart } from 'react-native-chart-kit';
+import { Empty, ErrorBanner, Loading, Screen, Section } from '@/components/ui';
+import { useApi } from '@/hooks/useApi';
+import type { MainScreenProps } from '@/navigation/types';
+import { bank } from '@/services/bank';
+import { chartConfig, colors } from '@/theme';
+import { money, percent, titleCase } from '@/utils/format';
 
-const screenWidth = Dimensions.get('window').width;
+const width = Math.min(Dimensions.get('window').width, 520) - 32;
 
-interface Investment {
-  id: string;
-  name: string;
-  type: 'stocks' | 'bonds' | 'crypto' | 'etf';
-  value: number;
-  invested: number;
-  change: number;
-  changePercent: number;
-}
-
-export default function InvestmentsScreen() {
-  const [investments, setInvestments] = useState<Investment[]>([
-    { id: '1', name: 'AAPL', type: 'stocks', value: 15000, invested: 12000, change: 3000, changePercent: 25 },
-    { id: '2', name: 'GOOGL', type: 'stocks', value: 8000, invested: 10000, change: -2000, changePercent: -20 },
-    { id: '3', name: 'BTC', type: 'crypto', value: 25000, invested: 15000, change: 10000, changePercent: 66.67 },
-    { id: '4', name: 'US Treasury', type: 'bonds', value: 5000, invested: 5000, change: 0, changePercent: 0 },
-    { id: '5', name: 'VOO', type: 'etf', value: 12000, invested: 10000, change: 2000, changePercent: 20 },
-  ]);
-
-  const totalValue = investments.reduce((sum, inv) => sum + inv.value, 0);
-  const totalInvested = investments.reduce((sum, inv) => sum + inv.invested, 0);
-  const totalChange = totalValue - totalInvested;
-  const totalChangePercent = (totalChange / totalInvested) * 100;
-
-  const chartData = {
-    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-    datasets: [
-      {
-        data: [45000, 48000, 52000, 50000, 58000, 65000],
-        color: (opacity = 1) => `rgba(76, 175, 80, ${opacity})`,
-        strokeWidth: 2,
-      },
-    ],
-  };
+/** Portfolio overview: value, gain, performance history, allocation and holdings. */
+export default function InvestmentsScreen({ navigation }: MainScreenProps<'Investments'>) {
+  const { data, error, loading, refreshing, refresh, reload } = useApi(() => bank.investments.portfolio());
+  if (loading && !data) return <Loading />;
+  const t = data?.totals;
+  const perf = (data?.performance ?? []).filter((_, i, arr) => i % Math.max(1, Math.floor(arr.length / 12)) === 0 || i === arr.length - 1);
+  const simulated = data?.holdings.some((h) => h.priceSource === 'simulated');
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Title style={styles.title}>Investments</Title>
-        <Paragraph style={styles.subtitle}>Portfolio Value: ${totalValue.toLocaleString()}</Paragraph>
-        <View style={styles.changeContainer}>
-          <Text style={[styles.change, totalChange >= 0 ? styles.positive : styles.negative]}>
-            {totalChange >= 0 ? '+' : ''}${totalChange.toLocaleString()} ({totalChangePercent.toFixed(2)}%)
-          </Text>
-        </View>
+    <Screen refreshing={refreshing} onRefresh={refresh} testID="investments">
+      <ErrorBanner error={error} onRetry={reload} />
+      <View style={styles.hero}>
+        <Text style={styles.heroLabel}>Portfolio value</Text>
+        <Text style={styles.heroValue} testID="portfolio-value">
+          {money(t?.value ?? 0)}
+        </Text>
+        <Text style={{ color: (t?.gain ?? 0) >= 0 ? '#bbf7d0' : '#fecaca', fontWeight: '700' }}>
+          {(t?.gain ?? 0) >= 0 ? '▲' : '▼'} {money(Math.abs(t?.gain ?? 0))} ({percent(t?.gainPercent ?? 0, 2)}) all time · {money(t?.dayChange ?? 0)} today
+        </Text>
       </View>
+      {simulated ? <Text style={styles.note}>Stock prices are simulated (no market-data key on this server). Crypto prices are live from Coinbase.</Text> : null}
 
-      <Card style={styles.chartCard}>
-        <Card.Content>
-          <Title style={styles.chartTitle">Portfolio Performance</Title>
+      {perf.length > 1 ? (
+        <Section title="Performance">
           <LineChart
-            data={chartData}
-            width={screenWidth - 40}
-            height={220}
-            chartConfig={{
-              backgroundColor: '#ffffff',
-              backgroundGradientFrom: '#ffffff',
-              backgroundGradientTo: '#ffffff',
-              decimalPlaces: 0,
-              color: (opacity = 1) => `rgba(76, 175, 80, ${opacity})`,
-              labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-              style: { borderRadius: 16 },
-            }}
+            data={{ labels: perf.map((p) => p.date.slice(5)), datasets: [{ data: perf.map((p) => p.value) }, { data: perf.map((p) => p.invested), color: (o = 1) => `rgba(107,114,128,${o})` }], legend: ['Value', 'Invested'] }}
+            width={width}
+            height={200}
+            chartConfig={{ ...chartConfig, color: (o = 1) => `rgba(15,157,88,${o})` }}
             bezier
-            style={styles.chart}
+            withDots={false}
+            style={{ borderRadius: 12 }}
           />
-        </Card.Content>
-      </Card>
+        </Section>
+      ) : null}
 
-      <Title style={styles.sectionTitle}>Your Holdings</Title>
-      {investments.map((investment) => (
-        <Card key={investment.id} style={styles.card}>
-          <Card.Content>
-            <View style={styles.cardHeader}>
-              <View>
-                <Title style={styles.investmentName}>{investment.name}</Title>
-                <Chip mode="flat" style={styles.chip}>{investment.type.toUpperCase()}</Chip>
+      {data?.allocation.length ? (
+        <Section title="Asset allocation">
+          <PieChart
+            data={data.allocation.map((a, i) => ({ name: titleCase(a.type), population: a.value, color: colors.chart[i % colors.chart.length], legendFontColor: colors.text, legendFontSize: 12 }))}
+            width={width}
+            height={180}
+            chartConfig={chartConfig}
+            accessor="population"
+            backgroundColor="transparent"
+            paddingLeft="12"
+          />
+        </Section>
+      ) : null}
+
+      <Section title="Holdings" right={<Button compact icon="swap-vertical" onPress={() => navigation.navigate('InvestmentTracking')}>Trade</Button>}>
+        {data?.holdings.length ? null : <Empty icon="chart-line" title="No investments yet" action={<Button onPress={() => navigation.navigate('InvestmentTracking')}>Start investing</Button>} />}
+        {data?.holdings.map((h) => (
+          <Card key={h.id} style={styles.card} onPress={() => navigation.navigate('InvestmentTracking', { symbol: h.symbol })} testID={`holding-${h.symbol}`}>
+            <Card.Content>
+              <View style={styles.row}>
+                <View>
+                  <Text style={styles.bold}>{h.symbol}</Text>
+                  <Text style={styles.muted}>{h.name}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.bold}>{money(h.value)}</Text>
+                  <Text style={{ color: h.gain >= 0 ? colors.positive : colors.negative, fontSize: 12 }}>
+                    {h.gain >= 0 ? '+' : ''}
+                    {money(h.gain)} ({percent(h.gainPercent, 2)})
+                  </Text>
+                </View>
               </View>
-              <View style={styles.valueContainer}>
-                <Text style={styles.value}>${investment.value.toLocaleString()}</Text>
-                <Text style={[styles.change, investment.change >= 0 ? styles.positive : styles.negative]}>
-                  {investment.change >= 0 ? '+' : ''}${investment.change.toLocaleString()} ({investment.changePercent.toFixed(2)}%)
+              <View style={[styles.row, { marginTop: 6 }]}>
+                <Chip compact>{titleCase(h.assetType)}</Chip>
+                <Text style={styles.muted}>
+                  {h.quantity} @ {money(h.currentPrice)} · avg {money(h.avgPrice)} · today {percent(h.dayChangePercent)}
                 </Text>
               </View>
-            </View>
-            <ProgressBar
-              progress={investment.value / (investment.value + investment.invested)}
-              color={investment.change >= 0 ? '#4CAF50' : '#F44336'}
-              style={styles.progressBar}
-            />
-            <Paragraph style={styles.invested}>Invested: ${investment.invested.toLocaleString()}</Paragraph>
-          </Card.Content>
-          <Card.Actions>
-            <Button mode="contained">Buy More</Button>
-            <Button mode="outlined">Sell</Button>
-          </Card.Actions>
-        </Card>
-      ))}
-
-      <Card style={styles.summaryCard}>
-        <Card.Content>
-          <Title style={styles.summaryTitle}>Portfolio Summary</Title>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Total Invested:</Text>
-            <Text style={styles.summaryValue}>${totalInvested.toLocaleString()}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Current Value:</Text>
-            <Text style={styles.summaryValue}>${totalValue.toLocaleString()}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Total Return:</Text>
-            <Text style={[styles.summaryValue, totalChange >= 0 ? styles.positive : styles.negative]}>
-              {totalChange >= 0 ? '+' : ''}${totalChange.toLocaleString()}
-            </Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Return %:</Text>
-            <Text style={[styles.summaryValue, totalChangePercent >= 0 ? styles.positive : styles.negative]}>
-              {totalChangePercent >= 0 ? '+' : ''}{totalChangePercent.toFixed(2)}%
-            </Text>
-          </View>
-        </Card.Content>
-      </Card>
-
-      <Button mode="contained" style={styles.addInvestmentButton} icon="plus">
-        Add New Investment
-      </Button>
-    </ScrollView>
+            </Card.Content>
+          </Card>
+        ))}
+      </Section>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 16,
-  },
-  header: {
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    fontSize: 16,
-    marginTop: 4,
-    color: '#666',
-  },
-  changeContainer: {
-    marginTop: 8,
-  },
-  change: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  positive: {
-    color: '#4CAF50',
-  },
-  negative: {
-    color: '#F44336',
-  },
-  chartCard: {
-    marginBottom: 20,
-    elevation: 2,
-  },
-  chartTitle: {
-    fontSize: 18,
-    marginBottom: 12,
-  },
-  chart: {
-    borderRadius: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  card: {
-    marginBottom: 12,
-    elevation: 2,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  investmentName: {
-    fontSize: 18,
-    marginBottom: 4,
-  },
-  chip: {
-    alignSelf: 'flex-start',
-  },
-  valueContainer: {
-    alignItems: 'flex-end',
-  },
-  value: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  progressBar: {
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  invested: {
-    fontSize: 12,
-    color: '#666',
-  },
-  summaryCard: {
-    marginBottom: 20,
-    elevation: 2,
-  },
-  summaryTitle: {
-    fontSize: 18,
-    marginBottom: 16,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  summaryLabel: {
-    fontSize: 16,
-    color: '#666',
-  },
-  summaryValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  addInvestmentButton: {
-    marginBottom: 20,
-  },
+  hero: { backgroundColor: '#065f46', borderRadius: 16, padding: 20 },
+  heroLabel: { color: '#d1fae5' },
+  heroValue: { color: '#fff', fontSize: 32, fontWeight: 'bold', marginVertical: 4 },
+  note: { color: colors.muted, fontSize: 12, marginTop: 8 },
+  card: { marginBottom: 8, backgroundColor: colors.surface },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  bold: { fontWeight: '700' },
+  muted: { color: colors.muted, fontSize: 12 },
 });

@@ -1,51 +1,48 @@
-import api from './api';
+import api, { clearSession, saveSession } from './api';
+import { KEYS, getItem } from './secureStorage';
+import type { AuthResponse, LoginResponse, User } from '../types';
 
 export interface LoginRequest {
-    email: string;
-    password: string;
+  email: string;
+  password: string;
 }
 
 export interface RegisterRequest {
-    email: string;
-    password: string;
-    firstName: string;
-    lastName: string;
-    phone?: string;
-}
-
-export interface AuthResponse {
-    accessToken: string;
-    refreshToken: string;
-    tokenType: string;
-    user: {
-        id: string;
-        email: string;
-        firstName: string;
-        lastName: string;
-        phone?: string;
-        role: string;
-    };
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
 }
 
 class AuthService {
-    async register(data: RegisterRequest): Promise<AuthResponse> {
-        const response = await api.post('/auth/register', data);
-        return response.data;
-    }
+  async register(data: RegisterRequest): Promise<AuthResponse> {
+    const response = await api.post<AuthResponse>('/auth/register', data, { auth: false });
+    await saveSession(response.accessToken, response.refreshToken);
+    return response;
+  }
 
-    async login(credentials: LoginRequest): Promise<AuthResponse> {
-        const response = await api.post('/auth/login', credentials);
-        return response.data;
-    }
+  async login(credentials: LoginRequest): Promise<LoginResponse> {
+    const response = await api.post<LoginResponse>('/auth/login', credentials, { auth: false });
+    if ('accessToken' in response) await saveSession(response.accessToken, response.refreshToken);
+    return response;
+  }
 
-    async logout(): Promise<void> {
-        await api.post('/auth/logout');
-    }
+  async verifyTwoFactor(challengeToken: string, code: string): Promise<AuthResponse> {
+    const response = await api.post<AuthResponse>('/auth/login/2fa', { challengeToken, code }, { auth: false });
+    await saveSession(response.accessToken, response.refreshToken);
+    return response;
+  }
 
-    async getProfile() {
-        const response = await api.get('/profile');
-        return response.data;
-    }
+  async logout(): Promise<void> {
+    const refreshToken = await getItem(KEYS.refreshToken);
+    await api.post('/auth/logout', { refreshToken }, { auth: false }).catch(() => undefined);
+    await clearSession();
+  }
+
+  async getProfile(): Promise<User> {
+    return api.get<User>('/profile');
+  }
 }
 
 export const authService = new AuthService();

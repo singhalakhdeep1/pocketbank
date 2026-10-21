@@ -1,0 +1,485 @@
+// PocketBank data model. Money is Decimal(14,2); asset quantities are Decimal(20,8).
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+enum AccountType {
+  SAVINGS
+  CHECKING
+  BUSINESS
+}
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum TxDirection {
+  CREDIT
+  DEBIT
+}
+
+enum TxKind {
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER_IN
+  TRANSFER_OUT
+  P2P_IN
+  P2P_OUT
+  BILL_PAYMENT
+  CARD_PURCHASE
+  QR_PAYMENT
+  TOPUP
+  INVESTMENT_BUY
+  INVESTMENT_SELL
+  SPLIT_SETTLEMENT
+  INTEREST
+  FEE
+}
+
+enum TxStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+enum CardKind {
+  PHYSICAL
+  VIRTUAL
+}
+
+enum CardNetwork {
+  VISA
+  MASTERCARD
+}
+
+enum CardType {
+  DEBIT
+  CREDIT
+}
+
+enum CardStatus {
+  INACTIVE
+  ACTIVE
+  FROZEN
+  CANCELLED
+}
+
+enum Recurrence {
+  NONE
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum BillStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+enum BudgetPeriod {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum AssetType {
+  STOCK
+  ETF
+  MUTUAL_FUND
+  BOND
+  CRYPTO
+}
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum ScheduledKind {
+  TRANSFER
+  P2P
+  BILL
+}
+
+enum SplitStatus {
+  PENDING
+  SETTLED
+}
+
+enum LocationType {
+  ATM
+  BRANCH
+}
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  phone             String?
+  role              Role      @default(CUSTOMER)
+  twoFactorSecret   String?
+  twoFactorEnabled  Boolean   @default(false)
+  pushToken         String?
+  notifyTransactions Boolean  @default(true)
+  notifySecurity    Boolean   @default(true)
+  notifyBudget      Boolean   @default(true)
+  language          String    @default("en")
+  failedLogins      Int       @default(0)
+  lockedUntil       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  refreshTokens  RefreshToken[]
+  accounts       Account[]
+  cards          Card[]
+  bills          Bill[]
+  budgets        BudgetCategory[]
+  holdings       Holding[]
+  trades         Trade[]
+  scheduled      ScheduledPayment[]
+  payees         Payee[]
+  splitsCreated  SplitBill[]        @relation("SplitCreator")
+  splitShares    SplitParticipant[]
+  notifications  Notification[]
+  wallets        CryptoWallet[]
+  snapshots      PortfolioSnapshot[]
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  family     String
+  device     String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+}
+
+model Account {
+  id            String        @id @default(uuid())
+  userId        String
+  accountNumber String        @unique
+  type          AccountType
+  nickname      String?
+  balance       Decimal       @default(0) @db.Decimal(14, 2)
+  currency      String        @default("USD")
+  status        AccountStatus @default(ACTIVE)
+  interestRate  Decimal       @default(0) @db.Decimal(6, 4)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+  cards         Card[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id            String      @id @default(uuid())
+  accountId     String
+  direction     TxDirection
+  kind          TxKind
+  amount        Decimal     @db.Decimal(14, 2)
+  balanceAfter  Decimal     @db.Decimal(14, 2)
+  currency      String
+  description   String
+  merchant      String?
+  category      String      @default("Other")
+  notes         String?
+  tags          String[]    @default([])
+  status        TxStatus    @default(COMPLETED)
+  reference     String
+  counterparty  String?
+  cardId        String?
+  receiptPath   String?
+  fxRate        Decimal?    @db.Decimal(18, 8)
+  createdAt     DateTime    @default(now())
+
+  account       Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
+  @@index([reference])
+  @@index([category])
+}
+
+model Card {
+  id                 String      @id @default(uuid())
+  userId             String
+  accountId          String
+  kind               CardKind
+  network            CardNetwork
+  type               CardType    @default(DEBIT)
+  panEncrypted       String
+  panHash            String      @unique
+  last4              String
+  expiryMonth        Int
+  expiryYear         Int
+  cvvEncrypted       String
+  cardholder         String
+  label              String?
+  status             CardStatus  @default(INACTIVE)
+  dailyLimit         Decimal     @default(1000) @db.Decimal(14, 2)
+  monthlyLimit       Decimal     @default(5000) @db.Decimal(14, 2)
+  onlineEnabled      Boolean     @default(true)
+  contactlessEnabled Boolean     @default(true)
+  createdAt          DateTime    @default(now())
+
+  user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account            Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Bill {
+  id          String     @id @default(uuid())
+  userId      String
+  accountId   String?
+  name        String
+  payee       String
+  category    String     @default("utilities")
+  amount      Decimal    @db.Decimal(14, 2)
+  dueDate     DateTime
+  recurrence  Recurrence @default(MONTHLY)
+  status      BillStatus @default(PENDING)
+  autoPay     Boolean    @default(false)
+  lastPaidAt  DateTime?
+  reminderSentFor DateTime?
+  createdAt   DateTime   @default(now())
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, dueDate])
+}
+
+model BudgetCategory {
+  id             String       @id @default(uuid())
+  userId         String
+  name           String
+  icon           String       @default("💰")
+  color          String       @default("#3b82f6")
+  limit          Decimal      @db.Decimal(14, 2)
+  period         BudgetPeriod @default(MONTHLY)
+  rollover       Boolean      @default(false)
+  alertThreshold Int          @default(80)
+  lastAlertKey   String?
+  createdAt      DateTime     @default(now())
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+}
+
+model Holding {
+  id         String    @id @default(uuid())
+  userId     String
+  symbol     String
+  name       String
+  assetType  AssetType
+  quantity   Decimal   @db.Decimal(20, 8)
+  avgPrice   Decimal   @db.Decimal(18, 6)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+}
+
+model Trade {
+  id          String    @id @default(uuid())
+  userId      String
+  accountId   String
+  symbol      String
+  assetType   AssetType
+  side        TradeSide
+  quantity    Decimal   @db.Decimal(20, 8)
+  price       Decimal   @db.Decimal(18, 6)
+  total       Decimal   @db.Decimal(14, 2)
+  realizedGain Decimal  @default(0) @db.Decimal(14, 2)
+  priceSource String
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model PortfolioSnapshot {
+  id         String   @id @default(uuid())
+  userId     String
+  day        DateTime @db.Date
+  value      Decimal  @db.Decimal(14, 2)
+  invested   Decimal  @db.Decimal(14, 2)
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+}
+
+model ScheduledPayment {
+  id              String        @id @default(uuid())
+  userId          String
+  kind            ScheduledKind
+  fromAccountId   String
+  toAccountNumber String?
+  billId          String?
+  amount          Decimal       @db.Decimal(14, 2)
+  description     String
+  frequency       Recurrence    @default(NONE)
+  nextRunAt       DateTime
+  endDate         DateTime?
+  active          Boolean       @default(true)
+  runCount        Int           @default(0)
+  lastRunAt       DateTime?
+  lastError       String?
+  createdAt       DateTime      @default(now())
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([active, nextRunAt])
+}
+
+model Payee {
+  id            String   @id @default(uuid())
+  userId        String
+  name          String
+  accountNumber String
+  lastUsedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, accountNumber])
+}
+
+model SplitBill {
+  id           String             @id @default(uuid())
+  creatorId    String
+  accountId    String
+  title        String
+  totalAmount  Decimal            @db.Decimal(14, 2)
+  currency     String             @default("USD")
+  status       SplitStatus        @default(PENDING)
+  createdAt    DateTime           @default(now())
+
+  creator      User               @relation("SplitCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  participants SplitParticipant[]
+}
+
+model SplitParticipant {
+  id          String    @id @default(uuid())
+  splitBillId String
+  userId      String?
+  name        String
+  email       String?
+  amount      Decimal   @db.Decimal(14, 2)
+  paid        Boolean   @default(false)
+  paidAt      DateTime?
+
+  splitBill   SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+model Location {
+  id        String       @id @default(uuid())
+  name      String
+  type      LocationType
+  address   String
+  lat       Float
+  lng       Float
+  hours     String
+  services  String[]     @default([])
+}
+
+model Notification {
+  id         String   @id @default(uuid())
+  userId     String
+  type       String
+  title      String
+  body       String
+  data       Json?
+  read       Boolean  @default(false)
+  pushStatus String?
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model CryptoWallet {
+  id         String     @id @default(uuid())
+  userId     String
+  address    String
+  chain      String     @default("ethereum")
+  label      String     @default("My wallet")
+  createdAt  DateTime   @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  txs        CryptoTx[]
+
+  @@unique([userId, address])
+}
+
+model CryptoTx {
+  id         String       @id @default(uuid())
+  walletId   String
+  hash       String       @unique
+  toAddress  String
+  valueWei   String
+  status     String       @default("pending")
+  blockNumber Int?
+  createdAt  DateTime     @default(now())
+
+  wallet     CryptoWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  userId        String?
+  eventType     String
+  description   String
+  correlationId String?
+  ip            String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model IdempotencyKey {
+  key        String   @id
+  userId     String
+  method     String
+  path       String
+  statusCode Int
+  response   Json
+  createdAt  DateTime @default(now())
+}

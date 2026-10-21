@@ -1,8 +1,9 @@
 /**
- * Structured Logging Service for Pocketbank
- * Implements structured logging with correlation IDs and context
+ * Structured Logging Service (HLD/LLD) — client side. JSON log entries with a correlation ID and
+ * user/device context. Every API request sends its correlation ID as `x-correlation-id`, so a log
+ * line on the phone can be matched to the API's log line for the same request.
  */
-import { v4 as uuidv4 } from 'uuid';
+import { Platform } from 'react-native';
 
 export interface LogContext {
   correlationId: string;
@@ -15,68 +16,80 @@ export interface LogContext {
 
 export interface LogEntry {
   timestamp: string;
-  level: string;
+  level: 'Information' | 'Warning' | 'Error' | 'Audit';
   message: string;
   context: LogContext;
-  additionalContext?: Record<string, any>;
+  additionalContext?: Record<string, unknown>;
   error?: string;
+}
+
+function uuid(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export class StructuredLoggingService {
   private currentContext: LogContext | null = null;
+  private readonly buffer: LogEntry[] = [];
 
-  setContext(context: LogContext): void {
-    this.currentContext = context;
+  setContext(context: Partial<LogContext>): void {
+    this.currentContext = { correlationId: this.currentContext?.correlationId ?? uuid(), platform: Platform.OS, ...this.currentContext, ...context };
   }
 
   getContext(): LogContext | null {
     return this.currentContext;
   }
 
-  logInformation(message: string, additionalContext?: Record<string, any>): void {
-    const logEntry = this._createLogEntry('Information', message, additionalContext, null);
-    console.log(JSON.stringify(logEntry));
+  /** Most recent entries (kept in memory) for the diagnostics section of the profile screen. */
+  recent(limit = 50): LogEntry[] {
+    return this.buffer.slice(-limit).reverse();
   }
 
-  logWarning(message: string, additionalContext?: Record<string, any>): void {
-    const logEntry = this._createLogEntry('Warning', message, additionalContext, null);
-    console.warn(JSON.stringify(logEntry));
+  logInformation(message: string, additionalContext?: Record<string, unknown>): void {
+    this.emit(this.entry('Information', message, additionalContext));
   }
 
-  logError(message: string, error: string, additionalContext?: Record<string, any>): void {
-    const logEntry = this._createLogEntry('Error', message, additionalContext, error);
-    console.error(JSON.stringify(logEntry));
+  logWarning(message: string, additionalContext?: Record<string, unknown>): void {
+    this.emit(this.entry('Warning', message, additionalContext));
   }
 
-  logAuditEvent(eventType: string, description: string, additionalContext?: Record<string, any>): void {
-    const context = { ...additionalContext };
-    context['auditEventType'] = eventType;
-    context['auditDescription'] = description;
+  logError(message: string, error: unknown, additionalContext?: Record<string, unknown>): void {
+    this.emit(this.entry('Error', message, additionalContext, error instanceof Error ? error.message : String(error)));
+  }
 
-    const logEntry = this._createLogEntry('Audit', `AUDIT: ${description}`, context, null);
-    console.log(JSON.stringify(logEntry));
+  logAuditEvent(eventType: string, description: string, additionalContext?: Record<string, unknown>): void {
+    this.emit(this.entry('Audit', `AUDIT: ${description}`, { ...additionalContext, auditEventType: eventType, auditDescription: description }));
   }
 
   static createCorrelationId(): string {
-    return uuidv4();
+    return uuid();
   }
 
-  private _createLogEntry(level: string, message: string, additionalContext?: Record<string, any>, error?: string): LogEntry {
-    const context = this.currentContext || this._defaultContext();
-
+  private entry(level: LogEntry['level'], message: string, additionalContext?: Record<string, unknown>, error?: string): LogEntry {
     return {
       timestamp: new Date().toISOString(),
       level,
       message,
-      context,
-      additionalContext,
-      error
+      context: this.currentContext ?? { correlationId: uuid(), platform: Platform.OS },
+      ...(additionalContext ? { additionalContext } : {}),
+      ...(error ? { error } : {}),
     };
   }
 
-  private _defaultContext(): LogContext {
-    return {
-      correlationId: StructuredLoggingService.createCorrelationId()
-    };
+  private emit(entry: LogEntry): void {
+    this.buffer.push(entry);
+    if (this.buffer.length > 200) this.buffer.shift();
+    if (__DEV__ || entry.level === 'Error') {
+      const line = JSON.stringify(entry);
+      if (entry.level === 'Error') console.error(line);
+      else if (entry.level === 'Warning') console.warn(line);
+      else console.log(line);
+    }
   }
 }
+
+export const logger = new StructuredLoggingService();

@@ -1,28 +1,22 @@
-import express from 'express';
+import { createApp } from './app.js';
+import { config } from './config.js';
+import { logger, prisma, redis } from './lib/infra.js';
+import { startScheduler, stopScheduler } from './services/scheduler.service.js';
 
-const app = express();
-const port = process.env.PORT || 4001;
-
-app.use(express.json());
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', app: 'PocketBank Mobile Backend API' });
+const app = createApp();
+const server = app.listen(config.port, () => {
+  logger.logInformation('PocketBank API listening', { port: config.port, env: config.nodeEnv, cache: redis ? 'redis' : 'memory' });
+  startScheduler();
 });
 
-app.post('/api/qr/pay', (req, res) => {
-  const { merchantId, amount } = req.body;
-  res.json({
-    transactionId: `tx-qr-${Date.now()}`,
-    status: 'SUCCESS',
-    merchantId,
-    amount,
-  });
-});
-
-if (process.env.NODE_ENV !== 'test') {
-  app.listen(port, () => {
-    console.log(`PocketBank API listening on port ${port}`);
-  });
+async function shutdown(signal: string) {
+  logger.logInformation('Shutting down', { signal });
+  stopScheduler();
+  server.close();
+  await Promise.allSettled([prisma.$disconnect(), redis?.quit()]);
+  process.exit(0);
 }
 
-export default app;
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('unhandledRejection', (err) => logger.logError('Unhandled promise rejection', err));

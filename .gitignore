@@ -1,0 +1,7 @@
+node_modules/
+dist-web/
+.expo/web/
+backend/uploads/
+*.env
+.env.*
+!.env.example

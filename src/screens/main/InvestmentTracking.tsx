@@ -1,346 +1,156 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { Dimensions, StyleSheet, View } from 'react-native';
+import { Button, Card, Chip, List, Searchbar, SegmentedButtons, Text } from 'react-native-paper';
+import { LineChart } from 'react-native-chart-kit';
+import { AccountPicker, ConfirmDialog, Field, Loading, Screen, Section, useToast } from '@/components/ui';
+import { useApi } from '@/hooks/useApi';
+import type { MainScreenProps } from '@/navigation/types';
+import { bank } from '@/services/bank';
+import { useAppDispatch, useAppSelector } from '@/store';
+import { fetchAccounts } from '@/store/slices/accountsSlice';
+import { chartConfig, colors } from '@/theme';
+import { money, parseAmount, percent, titleCase } from '@/utils/format';
 
-interface Investment {
-  id: string;
-  symbol: string;
-  name: string;
-  quantity: number;
-  avgPrice: number;
-  currentPrice: number;
-  change: number;
-  changePercent: number;
-}
+const width = Math.min(Dimensions.get('window').width, 520) - 32;
 
-interface InvestmentTrackingProps {
-  userId: string;
-}
+/** Search instruments, see a live quote + 30-day chart, and buy or sell by quantity or amount. */
+export default function InvestmentTracking({ route }: MainScreenProps<'InvestmentTracking'>) {
+  const dispatch = useAppDispatch();
+  const accounts = useAppSelector((s) => s.accounts.accounts).filter((a) => a.currency === 'USD');
+  const [symbol, setSymbol] = useState(route.params?.symbol ?? 'AAPL');
+  const [q, setQ] = useState('');
+  const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
+  const [mode, setMode] = useState<'amount' | 'quantity'>('amount');
+  const [value, setValue] = useState('');
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
-export function InvestmentTracking({ userId }: InvestmentTrackingProps) {
-  const [investments, setInvestments] = useState<Investment[]>([]);
-  const [totalValue, setTotalValue] = useState(0);
-  const [totalGain, setTotalGain] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data: instruments } = useApi(() => bank.investments.instruments(q), [q]);
+  const { data, loading, reload } = useApi(
+    async () => {
+      const [quote, history, portfolio] = await Promise.all([bank.investments.quote(symbol), bank.investments.history(symbol, 30), bank.investments.portfolio()]);
+      return { quote, history, holding: portfolio.holdings.find((h) => h.symbol === symbol) };
+    },
+    [symbol],
+  );
 
-  useEffect(() => {
-    fetchInvestments();
-  }, [userId]);
+  const n = parseAmount(value);
+  const estimate = data && n ? (mode === 'amount' ? n : n * data.quote.price) : 0;
+  const source = accountId ?? accounts.find((a) => a.accountType === 'CHECKING')?.id ?? accounts[0]?.id ?? null;
 
-  const fetchInvestments = async () => {
-    setIsLoading(true);
+  const trade = async () => {
+    if (!n) return;
+    setBusy(true);
     try {
-      const response = await fetch(`/api/users/${userId}/investments`);
-      if (response.ok) {
-        const data = await response.json();
-        setInvestments(data);
-        
-        const total = data.reduce((sum: number, inv: Investment) => 
-          sum + (inv.quantity * inv.currentPrice), 0
-        );
-        const gain = data.reduce((sum: number, inv: Investment) => 
-          sum + ((inv.currentPrice - inv.avgPrice) * inv.quantity), 0
-        );
-        
-        setTotalValue(total);
-        setTotalGain(gain);
-      }
-    } catch (error) {
-      console.error('Failed to fetch investments:', error);
+      const res = await bank.investments.trade({ symbol, side, accountId: source ?? undefined, ...(mode === 'amount' ? { amount: n } : { quantity: n }) });
+      setConfirm(false);
+      setValue('');
+      toast.show(`${res.side === 'BUY' ? 'Bought' : 'Sold'} ${res.quantity} ${res.symbol} for ${money(res.total)}${res.side === 'SELL' ? ` (gain ${money(res.realizedGain)})` : ''}`);
+      void dispatch(fetchAccounts());
+      await reload();
+    } catch (err) {
+      setConfirm(false);
+      toast.show((err as Error).message);
     } finally {
-      setIsLoading(false);
+      setBusy(false);
     }
   };
 
-  const formatCurrency = (value: number) => {
-    return `$${value.toFixed(2)}`;
-  };
-
-  const formatPercent = (value: number) => {
-    const sign = value >= 0 ? '+' : '';
-    return `${sign}${value.toFixed(2)}%`;
-  };
-
-  if (isLoading) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.loadingText}>Loading investments...</Text>
-      </View>
-    );
-  }
+  const points = data?.history.points ?? [];
+  const sampled = points.filter((_, i) => i % Math.max(1, Math.floor(points.length / 8)) === 0 || i === points.length - 1);
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Portfolio Summary */}
-      <View style={styles.summaryCard}>
-        <Text style={styles.summaryLabel}>Total Portfolio Value</Text>
-        <Text style={styles.summaryValue}>{formatCurrency(totalValue)}</Text>
-        <View style={styles.gainRow}>
-          <Text style={[styles.gainLabel, totalGain >= 0 ? styles.gainPositive : styles.gainNegative]}>
-            {totalGain >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(totalGain))}
-          </Text>
-          <Text style={[styles.gainPercent, totalGain >= 0 ? styles.gainPositive : styles.gainNegative]}>
-            {formatPercent((totalGain / (totalValue - totalGain)) * 100)}
-          </Text>
+    <View style={{ flex: 1 }}>
+      <Screen testID="trade">
+        <Searchbar placeholder="Search stocks, ETFs, funds, crypto" value={q} onChangeText={setQ} style={{ backgroundColor: colors.surface, marginBottom: 8 }} />
+        <View style={styles.chips}>
+          {(instruments ?? []).slice(0, q ? 12 : 10).map((i) => (
+            <Chip key={i.symbol} selected={i.symbol === symbol} onPress={() => setSymbol(i.symbol)} style={styles.chip} compact testID={`instrument-${i.symbol}`}>
+              {i.symbol}
+            </Chip>
+          ))}
         </View>
-      </View>
-
-      {/* Performance Chart Placeholder */}
-      <View style={styles.chartCard}>
-        <Text style={styles.chartTitle}>Performance (30 Days)</Text>
-        <View style={styles.chartPlaceholder}>
-          <Text style={styles.chartPlaceholderText}>📈 Chart Visualization</Text>
-        </View>
-      </View>
-
-      {/* Holdings */}
-      <Text style={styles.sectionTitle}>Your Holdings</Text>
-      
-      {investments.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>No investments yet</Text>
-          <TouchableOpacity style={styles.startButton}>
-            <Text style={styles.startButtonText}>Start Investing</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        investments.map((investment) => (
-          <View key={investment.id} style={styles.investmentCard}>
-            <View style={styles.investmentHeader}>
-              <View style={styles.symbolContainer}>
-                <Text style={styles.symbol}>{investment.symbol}</Text>
-              </View>
-              <View style={styles.investmentInfo}>
-                <Text style={styles.investmentName}>{investment.name}</Text>
-                <Text style={styles.quantity}>{investment.quantity} shares</Text>
-              </View>
-              <View style={styles.investmentValue}>
-                <Text style={styles.currentPrice}>{formatCurrency(investment.currentPrice)}</Text>
-                <Text style={[
-                  styles.change,
-                  investment.change >= 0 ? styles.changePositive : styles.changeNegative
-                ]}>
-                  {formatPercent(investment.changePercent)}
+        {loading && !data ? (
+          <Loading />
+        ) : data ? (
+          <>
+            <Card style={styles.card}>
+              <Card.Content>
+                <Text variant="titleLarge" style={styles.bold}>
+                  {data.quote.symbol} · {data.quote.name}
                 </Text>
-              </View>
-            </View>
-
-            <View style={styles.investmentDetails}>
-              <View>
-                <Text style={styles.detailLabel}>Avg Cost</Text>
-                <Text style={styles.detailValue}>{formatCurrency(investment.avgPrice)}</Text>
-              </View>
-              <View>
-                <Text style={styles.detailLabel}>Total Value</Text>
-                <Text style={styles.detailValue}>
-                  {formatCurrency(investment.quantity * investment.currentPrice)}
+                <Text style={styles.price} testID="quote-price">
+                  {money(data.quote.price)}
                 </Text>
-              </View>
-              <View>
-                <Text style={styles.detailLabel}>Gain/Loss</Text>
-                <Text style={[
-                  styles.detailValue,
-                  (investment.currentPrice - investment.avgPrice) >= 0 ? styles.gainPositive : styles.gainNegative
-                ]}>
-                  {formatCurrency((investment.currentPrice - investment.avgPrice) * investment.quantity)}
+                <Text style={{ color: data.quote.change >= 0 ? colors.positive : colors.negative }}>
+                  {percent(data.quote.changePercent, 2)} today · {titleCase(data.quote.assetType)} · {data.quote.source}
+                  {data.quote.stale ? ' (last known price)' : ''}
                 </Text>
-              </View>
-            </View>
-          </View>
-        ))
-      )}
+                {data.holding ? (
+                  <Text style={styles.muted}>
+                    You own {data.holding.quantity} · worth {money(data.holding.value)} · gain {money(data.holding.gain)}
+                  </Text>
+                ) : null}
+              </Card.Content>
+            </Card>
+            {sampled.length > 1 ? (
+              <LineChart
+                data={{ labels: sampled.map((p) => p.date.slice(5)), datasets: [{ data: sampled.map((p) => p.close) }] }}
+                width={width}
+                height={180}
+                chartConfig={{ ...chartConfig, decimalPlaces: 2 }}
+                bezier
+                withDots={false}
+                style={{ borderRadius: 12, marginTop: 8 }}
+              />
+            ) : null}
+            <Section title="Place an order">
+              <SegmentedButtons value={side} onValueChange={(v) => setSide(v as typeof side)} buttons={[{ value: 'BUY', label: 'Buy' }, { value: 'SELL', label: 'Sell' }]} style={{ marginBottom: 8 }} />
+              <SegmentedButtons value={mode} onValueChange={(v) => setMode(v as typeof mode)} buttons={[{ value: 'amount', label: 'By amount ($)' }, { value: 'quantity', label: 'By quantity' }]} style={{ marginBottom: 8 }} />
+              <AccountPicker accounts={accounts} value={source} onChange={setAccountId} label={side === 'BUY' ? 'Pay from' : 'Pay into'} />
+              <Field label={mode === 'amount' ? 'Amount in USD' : 'Units'} value={value} onChangeText={setValue} keyboardType="decimal-pad" testID="trade-value" />
+              {n ? <Text style={styles.muted}>Estimated {money(estimate)} at {money(data.quote.price)}</Text> : null}
+              <Button mode="contained" disabled={!n || busy} onPress={() => setConfirm(true)} style={{ marginTop: 8 }} buttonColor={side === 'SELL' ? colors.negative : undefined} testID="trade-submit">
+                Review {side === 'BUY' ? 'buy' : 'sell'}
+              </Button>
+            </Section>
+          </>
+        ) : null}
+        <TradeHistory />
+      </Screen>
+      <ConfirmDialog
+        visible={confirm}
+        title={`${side === 'BUY' ? 'Buy' : 'Sell'} ${symbol}`}
+        body={`About ${money(estimate)} (${mode === 'amount' ? `${value} USD` : `${value} units`}). Prices move — the executed price may differ slightly.`}
+        confirmLabel={side === 'BUY' ? 'Buy' : 'Sell'}
+        loading={busy}
+        onDismiss={() => setConfirm(false)}
+        onConfirm={trade}
+      />
+      {toast.node}
+    </View>
+  );
+}
 
-      {/* Add Investment Button */}
-      <TouchableOpacity style={styles.addButton}>
-        <Text style={styles.addButtonText}>+ Add Investment</Text>
-      </TouchableOpacity>
-    </ScrollView>
+function TradeHistory() {
+  const { data } = useApi(() => bank.investments.trades());
+  if (!data?.length) return null;
+  return (
+    <Section title="Recent trades">
+      {data.slice(0, 8).map((t) => (
+        <List.Item key={t.id} title={`${t.side} ${t.quantity} ${t.symbol}`} description={`${new Date(t.createdAt).toLocaleDateString()} @ ${money(t.price)}`} right={() => <Text style={{ alignSelf: 'center', fontWeight: '700' }}>{money(t.total)}</Text>} />
+      ))}
+    </Section>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 16,
-  },
-  loadingText: {
-    textAlign: 'center',
-    marginTop: 20,
-    color: '#666',
-  },
-  summaryCard: {
-    backgroundColor: '#1f2937',
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 16,
-  },
-  summaryLabel: {
-    color: '#9ca3af',
-    fontSize: 14,
-  },
-  summaryValue: {
-    color: 'white',
-    fontSize: 36,
-    fontWeight: 'bold',
-    marginTop: 8,
-  },
-  gainRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    gap: 12,
-  },
-  gainLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  gainPositive: {
-    color: '#10b981',
-  },
-  gainNegative: {
-    color: '#ef4444',
-  },
-  gainPercent: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  chartCard: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-  },
-  chartTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 16,
-  },
-  chartPlaceholder: {
-    height: 200,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chartPlaceholderText: {
-    fontSize: 16,
-    color: '#9ca3af',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 16,
-  },
-  emptyState: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyText: {
-    color: '#9ca3af',
-    fontSize: 16,
-    marginBottom: 16,
-  },
-  startButton: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 12,
-    padding: 16,
-  },
-  startButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  investmentCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  investmentHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  symbolContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#3b82f6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  symbol: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  investmentInfo: {
-    flex: 1,
-  },
-  investmentName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  quantity: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginTop: 2,
-  },
-  investmentValue: {
-    alignItems: 'flex-end',
-  },
-  currentPrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1f2937',
-  },
-  change: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  changePositive: {
-    color: '#10b981',
-  },
-  changeNegative: {
-    color: '#ef4444',
-  },
-  investmentDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-  detailLabel: {
-    fontSize: 12,
-    color: '#6b7280',
-  },
-  detailValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1f2937',
-    marginTop: 2,
-  },
-  addButton: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  addButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
+  chip: { marginRight: 6, marginBottom: 6 },
+  card: { backgroundColor: colors.surface },
+  bold: { fontWeight: '700' },
+  price: { fontSize: 28, fontWeight: 'bold', marginVertical: 4 },
+  muted: { color: colors.muted, fontSize: 12, marginTop: 4 },
 });

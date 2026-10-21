@@ -1,56 +1,64 @@
 /**
- * Cache Service for Pocketbank
- * Implements distributed caching with Redis for mobile banking app data
+ * Cache Service (HLD/LLD) — client side. A TTL cache on AsyncStorage with the same API as the
+ * backend's Redis cache (get / set / delete / getOrSet / invalidatePattern). The app uses it to show
+ * the last known dashboard and accounts instantly and when offline; the API keeps the shared Redis
+ * cache.
  */
-import { Redis } from 'ioredis';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+interface Entry {
+  value: string;
+  expiresAt: number;
+}
+
+const PREFIX = 'pbcache:';
+
+function globToRegExp(pattern: string): RegExp {
+  return new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+}
 
 export class CacheService {
-  private redis: Redis;
-  private defaultTTL: number = 3600; // 1 hour
+  constructor(private readonly defaultTTL = 3600) {}
 
-  constructor() {
-    this.redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-    });
-  }
-
-  async get(key: string): Promise<string | null> {
-    const value = await this.redis.get(key);
-    return value;
+  async get(key: string, { allowStale = false } = {}): Promise<string | null> {
+    try {
+      const raw = await AsyncStorage.getItem(PREFIX + key);
+      if (!raw) return null;
+      const entry = JSON.parse(raw) as Entry;
+      if (entry.expiresAt > Date.now() || allowStale) return entry.value;
+      await AsyncStorage.removeItem(PREFIX + key);
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   async set(key: string, value: string, ttl?: number): Promise<void> {
-    const expiration = ttl || this.defaultTTL;
-    await this.redis.setex(key, expiration, value);
+    const entry: Entry = { value, expiresAt: Date.now() + (ttl ?? this.defaultTTL) * 1000 };
+    await AsyncStorage.setItem(PREFIX + key, JSON.stringify(entry)).catch(() => undefined);
   }
 
   async delete(key: string): Promise<void> {
-    await this.redis.del(key);
+    await AsyncStorage.removeItem(PREFIX + key).catch(() => undefined);
   }
 
   async getOrSet(key: string, factory: () => Promise<string>, ttl?: number): Promise<string> {
     const cachedValue = await this.get(key);
-    if (cachedValue !== null) {
-      return cachedValue;
-    }
-
+    if (cachedValue !== null) return cachedValue;
     const value = await factory();
     await this.set(key, value, ttl);
     return value;
   }
 
   async invalidatePattern(pattern: string): Promise<void> {
-    const keys = await this.redis.keys(pattern);
-    if (keys.length > 0) {
-      await this.redis.del(...keys);
-    }
+    const re = globToRegExp(pattern);
+    const keys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(PREFIX) && re.test(k.slice(PREFIX.length)));
+    if (keys.length) await AsyncStorage.multiRemove(keys);
   }
 
   async clearAll(): Promise<void> {
-    const keys = await this.redis.keys('*');
-    if (keys.length > 0) {
-      await this.redis.del(...keys);
-    }
+    await this.invalidatePattern('*');
   }
 }
+
+export const cache = new CacheService(24 * 3600);

@@ -1,29 +1,30 @@
-import api from './api';
+import { bank } from './bank';
+import { cache } from './cache/cache.service';
+import type { Account } from '../types';
 
-export interface Account {
-    id: string;
-    accountNumber: string;
-    accountType: string;
-    balance: number;
-    currency: string;
-    status: string;
-}
+export type { Account };
 
 class AccountService {
-    async getAccounts(): Promise<Account[]> {
-        const response = await api.get('/accounts');
-        return response.data;
+  /** Fresh list from the API; the last good copy is cached so the app can show it offline. */
+  async getAccounts(): Promise<Account[]> {
+    try {
+      const accounts = await bank.accounts.list();
+      await cache.set('accounts', JSON.stringify(accounts));
+      return accounts;
+    } catch (err) {
+      const cached = await cache.get('accounts', { allowStale: true });
+      if (cached) return JSON.parse(cached) as Account[];
+      throw err;
     }
+  }
 
-    async getAccount(id: string): Promise<Account> {
-        const response = await api.get(`/accounts/${id}`);
-        return response.data;
-    }
+  getAccount(id: string) {
+    return bank.accounts.get(id);
+  }
 
-    async createAccount(data: { accountType: string; currency?: string }): Promise<Account> {
-        const response = await api.post('/accounts', data);
-        return response.data;
-    }
+  createAccount(data: { accountType: Account['accountType']; currency?: string; nickname?: string }) {
+    return bank.accounts.create(data);
+  }
 }
 
 export const accountService = new AccountService();

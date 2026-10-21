@@ -1,327 +1,103 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import { Card, Title, Paragraph, Button, ProgressBar, Chip, FAB, Portal, Modal } from 'react-native-paper';
+import React from 'react';
+import { Dimensions, StyleSheet, View } from 'react-native';
+import { Button, Card, Chip, Text } from 'react-native-paper';
 import { PieChart } from 'react-native-chart-kit';
-import { Dimensions } from 'react-native';
+import { Empty, ErrorBanner, Loading, Screen, Section, UsageBar } from '@/components/ui';
+import { useApi } from '@/hooks/useApi';
+import type { MainScreenProps } from '@/navigation/types';
+import { bank } from '@/services/bank';
+import { chartConfig, colors } from '@/theme';
+import { money } from '@/utils/format';
 
-const screenWidth = Dimensions.get('window').width;
+const width = Math.min(Dimensions.get('window').width, 520) - 32;
 
-interface BudgetCategory {
-  id: string;
-  name: string;
-  spent: number;
-  limit: number;
-  color: string;
-}
+/** Budget overview: total vs limit, spending split by category, per-category status and tips. */
+export default function BudgetScreen({ navigation }: MainScreenProps<'Budget'>) {
+  const { data, error, loading, refreshing, refresh, reload } = useApi(async () => {
+    const [budgets, insights] = await Promise.all([bank.budgets.list(), bank.budgets.insights()]);
+    return { ...budgets, insights };
+  });
 
-interface Budget {
-  id: string;
-  name: string;
-  period: 'monthly' | 'weekly';
-  totalLimit: number;
-  totalSpent: number;
-  categories: BudgetCategory[];
-}
-
-export default function BudgetScreen() {
-  const [budgets, setBudgets] = useState<Budget[]>([
-    {
-      id: '1',
-      name: 'Monthly Budget',
-      period: 'monthly',
-      totalLimit: 5000,
-      totalSpent: 3250,
-      categories: [
-        { id: '1', name: 'Housing', spent: 1500, limit: 1500, color: '#FF6384' },
-        { id: '2', name: 'Food', spent: 600, limit: 800, color: '#36A2EB' },
-        { id: '3', name: 'Transport', spent: 300, limit: 400, color: '#FFCE56' },
-        { id: '4', name: 'Entertainment', spent: 450, limit: 300, color: '#4BC0C0' },
-        { id: '5', name: 'Shopping', spent: 400, limit: 500, color: '#9966FF' },
-      ],
-    },
-  ]);
-
-  const [modalVisible, setModalVisible] = useState(false);
-
-  const currentBudget = budgets[0];
-  const remaining = currentBudget.totalLimit - currentBudget.totalSpent;
-  const progress = currentBudget.totalSpent / currentBudget.totalLimit;
-
-  const pieData = currentBudget.categories.map(cat => ({
-    name: cat.name,
-    population: cat.spent,
-    color: cat.color,
-    legendFontColor: '#333',
-    legendFontSize: 12,
-  }));
+  if (loading && !data) return <Loading />;
+  const s = data?.summary;
+  const pie = (data?.items ?? [])
+    .filter((b) => b.spent > 0)
+    .map((b) => ({ name: b.name, population: b.spent, color: b.color, legendFontColor: colors.text, legendFontSize: 12 }));
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Title style={styles.title}>Budget</Title>
-        <Paragraph style={styles.subtitle}>Track your spending</Paragraph>
-      </View>
-
-      <Card style={styles.overviewCard}>
+    <Screen refreshing={refreshing} onRefresh={refresh} testID="budget">
+      <ErrorBanner error={error} onRetry={reload} />
+      <Card style={styles.card}>
         <Card.Content>
-          <Title style={styles.budgetTitle}>{currentBudget.name}</Title>
-          <View style={styles.overviewRow}>
+          <Text variant="titleMedium" style={styles.bold}>
+            This period
+          </Text>
+          <View style={styles.row}>
             <View>
-              <Text style={styles.overviewLabel}>Spent</Text>
-              <Text style={styles.overviewValue}>${currentBudget.totalSpent.toLocaleString()}</Text>
+              <Text style={styles.muted}>Spent</Text>
+              <Text style={styles.big}>{money(s?.totalSpent ?? 0)}</Text>
             </View>
             <View>
-              <Text style={styles.overviewLabel}>Limit</Text>
-              <Text style={styles.overviewValue}>${currentBudget.totalLimit.toLocaleString()}</Text>
+              <Text style={styles.muted}>Limit</Text>
+              <Text style={styles.big}>{money(s?.totalLimit ?? 0)}</Text>
             </View>
             <View>
-              <Text style={styles.overviewLabel}>Remaining</Text>
-              <Text style={[styles.overviewValue, remaining >= 0 ? styles.positive : styles.negative]}>
-                ${remaining.toLocaleString()}
-              </Text>
+              <Text style={styles.muted}>Left</Text>
+              <Text style={[styles.big, { color: (s?.remaining ?? 0) >= 0 ? colors.positive : colors.negative }]}>{money(s?.remaining ?? 0)}</Text>
             </View>
           </View>
-          <ProgressBar
-            progress={Math.min(progress, 1)}
-            color={progress > 0.9 ? '#F44336' : progress > 0.7 ? '#FF9800' : '#4CAF50'}
-            style={styles.progressBar}
-          />
-          <Text style={styles.progressText}>{(progress * 100).toFixed(0)}% of budget used</Text>
+          <UsageBar percent={s?.percentUsed ?? 0} />
+          <Text style={styles.muted}>{(s?.percentUsed ?? 0).toFixed(0)}% of budget used</Text>
         </Card.Content>
       </Card>
 
-      <Card style={styles.chartCard}>
-        <Card.Content>
-          <Title style={styles.chartTitle}>Spending by Category</Title>
-          <PieChart
-            data={pieData}
-            width={screenWidth - 40}
-            height={220}
-            chartConfig={{
-              backgroundColor: '#ffffff',
-              backgroundGradientFrom: '#ffffff',
-              backgroundGradientTo: '#ffffff',
-              color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-            }}
-            accessor="population"
-            backgroundColor="transparent"
-            paddingLeft="15"
-            absolute
-            style={styles.chart}
-          />
-        </Card.Content>
-      </Card>
+      {pie.length ? (
+        <Section title="Spending by category">
+          <PieChart data={pie} width={width} height={200} chartConfig={chartConfig} accessor="population" backgroundColor="transparent" paddingLeft="12" absolute />
+        </Section>
+      ) : null}
 
-      <Title style={styles.sectionTitle}>Categories</Title>
-      {currentBudget.categories.map((category) => {
-        const categoryProgress = category.spent / category.limit;
-        const isOverBudget = category.spent > category.limit;
-        return (
-          <Card key={category.id} style={styles.categoryCard}>
+      <Section title="Categories" right={<Button compact onPress={() => navigation.navigate('BudgetCategories')}>Manage</Button>}>
+        {data?.items.length ? null : <Empty icon="wallet-outline" title="No budgets yet" action={<Button onPress={() => navigation.navigate('BudgetCategories')}>Create one</Button>} />}
+        {data?.items.map((b) => (
+          <Card key={b.id} style={styles.card} onPress={() => navigation.navigate('Transactions', { category: b.name })}>
             <Card.Content>
-              <View style={styles.categoryHeader}>
-                <View style={styles.categoryInfo}>
-                  <View style={[styles.colorDot, { backgroundColor: category.color }]} />
-                  <Title style={styles.categoryName}>{category.name}</Title>
-                </View>
-                <Chip
-                  mode="flat"
-                  style={[styles.statusChip, isOverBudget ? styles.overBudget : styles.onTrack]}
-                >
-                  {isOverBudget ? 'Over Budget' : 'On Track'}
+              <View style={styles.row}>
+                <Text style={styles.bold}>
+                  {b.icon} {b.name}
+                </Text>
+                <Chip compact style={{ backgroundColor: b.isOverBudget ? '#fee2e2' : '#dcfce7' }}>
+                  {b.isOverBudget ? 'Over budget' : 'On track'}
                 </Chip>
               </View>
-              <View style={styles.categoryStats}>
-                <Text style={styles.categorySpent}>${category.spent.toLocaleString()}</Text>
-                <Text style={styles.categoryLimit}> of ${category.limit.toLocaleString()}</Text>
-              </View>
-              <ProgressBar
-                progress={Math.min(categoryProgress, 1)}
-                color={isOverBudget ? '#F44336' : categoryProgress > 0.8 ? '#FF9800' : '#4CAF50'}
-                style={styles.categoryProgress}
-              />
+              <Text style={styles.muted}>
+                {money(b.spent)} of {money(b.effectiveLimit)}
+                {b.rolledOver ? ` (incl. ${money(b.rolledOver)} rolled over)` : ''} · {money(b.dailyAllowance)}/day left
+              </Text>
+              <UsageBar percent={b.percentUsed} />
             </Card.Content>
-            <Card.Actions>
-              <Button mode="text">Edit Limit</Button>
-              <Button mode="text">View Transactions</Button>
-            </Card.Actions>
           </Card>
-        );
-      })}
+        ))}
+      </Section>
 
-      <Card style={styles.tipsCard}>
-        <Card.Content>
-          <Title style={styles.tipsTitle}>Budget Tips</Title>
-          <Paragraph style={styles.tip}>• You're spending 50% over on Entertainment. Consider reducing subscriptions.</Paragraph>
-          <Paragraph style={styles.tip}>• Great job staying under your Housing budget!</Paragraph>
-          <Paragraph style={styles.tip}>• Set aside $200 for unexpected expenses.</Paragraph>
-        </Card.Content>
-      </Card>
-
-      <FAB
-        icon="plus"
-        style={styles.fab}
-        onPress={() => setModalVisible(true)}
-      />
-
-      <Portal>
-        <Modal visible={modalVisible} onDismiss={() => setModalVisible(false)} contentContainerStyle={styles.modalContent}>
-          <Title>Add Budget Category</Title>
-          <Button mode="contained" onPress={() => setModalVisible(false)} style={styles.modalButton}>
-            Create
-          </Button>
-        </Modal>
-      </Portal>
-    </ScrollView>
+      {data?.insights.length ? (
+        <Section title="Tips">
+          {data.insights.map((t, i) => (
+            <Text key={i} style={[styles.tip, { color: t.type === 'warning' ? colors.negative : t.type === 'success' ? colors.positive : colors.text }]}>
+              • {t.message}
+            </Text>
+          ))}
+        </Section>
+      ) : null}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 16,
-  },
-  header: {
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    fontSize: 16,
-    marginTop: 4,
-    color: '#666',
-  },
-  overviewCard: {
-    marginBottom: 20,
-    elevation: 2,
-  },
-  budgetTitle: {
-    fontSize: 20,
-    marginBottom: 16,
-  },
-  overviewRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  overviewLabel: {
-    fontSize: 14,
-    color: '#666',
-  },
-  overviewValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  positive: {
-    color: '#4CAF50',
-  },
-  negative: {
-    color: '#F44336',
-  },
-  progressBar: {
-    height: 8,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
-  progressText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
-  chartCard: {
-    marginBottom: 20,
-    elevation: 2,
-  },
-  chartTitle: {
-    fontSize: 18,
-    marginBottom: 12,
-  },
-  chart: {
-    borderRadius: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  categoryCard: {
-    marginBottom: 12,
-    elevation: 2,
-  },
-  categoryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  categoryInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  colorDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 8,
-  },
-  categoryName: {
-    fontSize: 16,
-  },
-  statusChip: {
-    fontSize: 10,
-  },
-  overBudget: {
-    backgroundColor: '#FFEBEE',
-  },
-  onTrack: {
-    backgroundColor: '#E8F5E9',
-  },
-  categoryStats: {
-    flexDirection: 'row',
-    marginBottom: 8,
-  },
-  categorySpent: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  categoryLimit: {
-    fontSize: 14,
-    color: '#666',
-    marginLeft: 4,
-  },
-  categoryProgress: {
-    height: 6,
-    borderRadius: 3,
-  },
-  tipsCard: {
-    marginBottom: 20,
-    elevation: 2,
-    backgroundColor: '#E3F2FD',
-  },
-  tipsTitle: {
-    fontSize: 18,
-    marginBottom: 12,
-  },
-  tip: {
-    fontSize: 14,
-    marginBottom: 8,
-    color: '#1565C0',
-  },
-  fab: {
-    position: 'absolute',
-    right: 16,
-    bottom: 16,
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    padding: 20,
-    margin: 20,
-    borderRadius: 10,
-  },
-  modalButton: {
-    marginTop: 16,
-  },
+  card: { marginBottom: 10, backgroundColor: colors.surface },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 4 },
+  bold: { fontWeight: '700' },
+  big: { fontSize: 18, fontWeight: '700' },
+  muted: { color: colors.muted, fontSize: 12 },
+  tip: { marginBottom: 6 },
 });

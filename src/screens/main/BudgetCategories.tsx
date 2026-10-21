@@ -1,393 +1,150 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal } from 'react-native';
+import React, { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { Button, Card, Dialog, IconButton, Portal, Switch, Text, TextInput } from 'react-native-paper';
+import { ChipGroup, Empty, ErrorBanner, Loading, Screen, UsageBar, useToast } from '@/components/ui';
+import { useApi } from '@/hooks/useApi';
+import { bank } from '@/services/bank';
+import { colors } from '@/theme';
+import type { Budget } from '@/types';
+import { money, parseAmount } from '@/utils/format';
 
-interface BudgetCategory {
-  id: string;
-  name: string;
-  icon: string;
-  color: string;
-  limit: number;
-  spent: number;
-}
+const ICONS = ['🛒', '🍽️', '🚗', '🛍️', '🎬', '💡', '🏠', '💊', '✈️', '🎓', '💰'];
+const SUGGESTED = ['Groceries', 'Food & Dining', 'Transport', 'Shopping', 'Entertainment', 'Utilities', 'Health', 'Travel', 'Subscriptions'];
 
-interface BudgetCategoriesProps {
-  userId: string;
-}
+/** Create, edit and delete budget categories (names match transaction categories). */
+export default function BudgetCategories() {
+  const { data, error, loading, refreshing, refresh, reload } = useApi(() => bank.budgets.list());
+  const [editing, setEditing] = useState<Budget | 'new' | null>(null);
+  const [name, setName] = useState('');
+  const [limit, setLimit] = useState('');
+  const [icon, setIcon] = useState('💰');
+  const [period, setPeriod] = useState<Budget['period']>('MONTHLY');
+  const [rollover, setRollover] = useState(false);
+  const [threshold, setThreshold] = useState('80');
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
-export function BudgetCategories({ userId }: BudgetCategoriesProps) {
-  const [categories, setCategories] = useState<BudgetCategory[]>([]);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [newCategoryLimit, setNewCategoryLimit] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  if (loading && !data) return <Loading />;
 
-  useEffect(() => {
-    fetchCategories();
-  }, [userId]);
+  const openNew = () => {
+    setEditing('new');
+    setName('');
+    setLimit('');
+    setIcon('💰');
+    setPeriod('MONTHLY');
+    setRollover(false);
+    setThreshold('80');
+  };
+  const openEdit = (b: Budget) => {
+    setEditing(b);
+    setLimit(String(b.limit));
+    setRollover(b.rollover);
+    setThreshold(String(b.alertThreshold));
+  };
 
-  const fetchCategories = async () => {
-    setIsLoading(true);
+  const save = async () => {
+    setBusy(true);
     try {
-      const response = await fetch(`/api/users/${userId}/budget-categories`);
-      if (response.ok) {
-        const data = await response.json();
-        setCategories(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch categories:', error);
+      const value = parseAmount(limit) as number;
+      const alertThreshold = Math.min(100, Math.max(10, Number(threshold) || 80));
+      if (editing === 'new') await bank.budgets.create({ name: name.trim(), limit: value, icon, period, rollover, alertThreshold });
+      else if (editing) await bank.budgets.update(editing.id, { limit: value, rollover, alertThreshold });
+      setEditing(null);
+      toast.show('Budget saved');
+      await reload();
+    } catch (err) {
+      toast.show((err as Error).message);
     } finally {
-      setIsLoading(false);
+      setBusy(false);
     }
-  };
-
-  const addCategory = async () => {
-    if (!newCategoryName || !newCategoryLimit) return;
-
-    try {
-      const response = await fetch('/api/budget-categories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          name: newCategoryName,
-          limit: parseFloat(newCategoryLimit),
-        }),
-      });
-
-      if (response.ok) {
-        const newCategory = await response.json();
-        setCategories(prev => [...prev, newCategory]);
-        setShowAddModal(false);
-        setNewCategoryName('');
-        setNewCategoryLimit('');
-      }
-    } catch (error) {
-      console.error('Failed to add category:', error);
-    }
-  };
-
-  const formatCurrency = (value: number) => {
-    return `$${value.toFixed(2)}`;
-  };
-
-  const getProgressColor = (percentage: number) => {
-    if (percentage >= 90) return '#ef4444';
-    if (percentage >= 70) return '#f59e0b';
-    return '#10b981';
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Budget Categories</Text>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => setShowAddModal(true)}
-        >
-          <Text style={styles.addButtonText}>+ Add Category</Text>
-        </TouchableOpacity>
-      </View>
-
-      {isLoading ? (
-        <Text style={styles.loadingText}>Loading categories...</Text>
-      ) : categories.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>No budget categories yet</Text>
-          <TouchableOpacity
-            style={styles.startButton}
-            onPress={() => setShowAddModal(true)}
-          >
-            <Text style={styles.startButtonText}>Create Your First Budget</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        categories.map((category) => {
-          const percentage = (category.spent / category.limit) * 100;
-          const remaining = category.limit - category.spent;
-
-          return (
-            <View key={category.id} style={styles.categoryCard}>
-              <View style={styles.categoryHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: category.color }]}>
-                  <Text style={styles.icon}>{category.icon}</Text>
+    <View style={{ flex: 1 }}>
+      <Screen refreshing={refreshing} onRefresh={refresh} testID="budget-categories">
+        <ErrorBanner error={error} onRetry={reload} />
+        {data?.items.length ? null : <Empty icon="shape-outline" title="No budget categories yet" />}
+        {data?.items.map((b) => (
+          <Card key={b.id} style={styles.card} onPress={() => openEdit(b)} testID={`budget-${b.name}`}>
+            <Card.Content>
+              <View style={styles.row}>
+                <View style={[styles.icon, { backgroundColor: b.color }]}>
+                  <Text style={{ fontSize: 20 }}>{b.icon}</Text>
                 </View>
-                <View style={styles.categoryInfo}>
-                  <Text style={styles.categoryName}>{category.name}</Text>
-                  <Text style={styles.categorySpent}>
-                    Spent: {formatCurrency(category.spent)}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.bold}>{b.name}</Text>
+                  <Text style={styles.muted}>
+                    Spent {money(b.spent)} · {b.period.toLowerCase()} · alert at {b.alertThreshold}%{b.rollover ? ' · rollover' : ''}
                   </Text>
                 </View>
-                <View style={styles.categoryLimit}>
-                  <Text style={styles.limitText}>{formatCurrency(category.limit)}</Text>
-                  <Text style={[
-                    styles.remainingText,
-                    remaining < 0 && styles.overBudget
-                  ]}>
-                    {remaining >= 0 ? `${formatCurrency(remaining)} left` : `${formatCurrency(Math.abs(remaining))} over`}
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.bold}>{money(b.effectiveLimit)}</Text>
+                  <Text style={{ color: b.remaining >= 0 ? colors.positive : colors.negative, fontSize: 12 }}>
+                    {b.remaining >= 0 ? `${money(b.remaining)} left` : `${money(-b.remaining)} over`}
                   </Text>
                 </View>
+                <IconButton icon="delete-outline" onPress={() => bank.budgets.remove(b.id).then(reload)} />
               </View>
-
-              <View style={styles.progressBarContainer}>
-                <View style={styles.progressBarBackground}>
-                  <View
-                    style={[
-                      styles.progressBarFill,
-                      {
-                        width: `${Math.min(percentage, 100)}%`,
-                        backgroundColor: getProgressColor(percentage),
-                      },
-                    ]}
-                  />
-                </View>
-                <Text style={[styles.percentageText, { color: getProgressColor(percentage) }]}>
-                  {percentage.toFixed(0)}%
-                </Text>
+              <UsageBar percent={b.percentUsed} />
+            </Card.Content>
+          </Card>
+        ))}
+        <Button mode="contained" icon="plus" onPress={openNew} style={{ marginTop: 8 }} testID="add-budget">
+          Add category
+        </Button>
+      </Screen>
+      <Portal>
+        <Dialog visible={editing !== null} onDismiss={() => setEditing(null)}>
+          <Dialog.Title>{editing === 'new' || editing === null ? 'New budget category' : `Edit ${editing.name}`}</Dialog.Title>
+          <Dialog.ScrollArea style={{ maxHeight: 480 }}>
+            <View style={{ paddingVertical: 8 }}>
+              {editing === 'new' ? (
+                <>
+                  <TextInput label="Category name" value={name} onChangeText={setName} mode="outlined" dense style={styles.input} testID="budget-name" />
+                  <View style={styles.suggest}>
+                    {SUGGESTED.map((s) => (
+                      <Button key={s} compact mode="text" onPress={() => setName(s)}>
+                        {s}
+                      </Button>
+                    ))}
+                  </View>
+                  <View style={styles.suggest}>
+                    {ICONS.map((i) => (
+                      <Button key={i} compact mode={icon === i ? 'contained-tonal' : 'text'} onPress={() => setIcon(i)}>
+                        {i}
+                      </Button>
+                    ))}
+                  </View>
+                  <ChipGroup options={['WEEKLY', 'MONTHLY', 'YEARLY'] as const} value={period} onChange={setPeriod} />
+                </>
+              ) : null}
+              <TextInput label="Limit" value={limit} onChangeText={setLimit} keyboardType="decimal-pad" mode="outlined" dense style={styles.input} testID="budget-limit" />
+              <TextInput label="Alert at % used" value={threshold} onChangeText={setThreshold} keyboardType="number-pad" mode="outlined" dense style={styles.input} />
+              <View style={styles.row}>
+                <Text>Roll unused budget into next period</Text>
+                <Switch value={rollover} onValueChange={setRollover} />
               </View>
             </View>
-          );
-        })
-      )}
-
-      <Modal
-        visible={showAddModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowAddModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Add Budget Category</Text>
-
-            <View style={styles.modalInput}>
-              <Text style={styles.modalLabel}>Category Name</Text>
-              <TextInput
-                style={styles.textInput}
-                value={newCategoryName}
-                onChangeText={setNewCategoryName}
-                placeholder="e.g., Groceries"
-              />
-            </View>
-
-            <View style={styles.modalInput}>
-              <Text style={styles.modalLabel}>Monthly Limit</Text>
-              <TextInput
-                style={styles.textInput}
-                value={newCategoryLimit}
-                onChangeText={setNewCategoryLimit}
-                placeholder="$0.00"
-                keyboardType="decimal-pad"
-              />
-            </View>
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowAddModal(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={addCategory}
-              >
-                <Text style={styles.confirmButtonText}>Add</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </ScrollView>
+          </Dialog.ScrollArea>
+          <Dialog.Actions>
+            <Button onPress={() => setEditing(null)}>Cancel</Button>
+            <Button mode="contained" loading={busy} disabled={!parseAmount(limit) || (editing === 'new' && !name.trim())} onPress={save} testID="save-budget">
+              Save
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+      {toast.node}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 16,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1f2937',
-  },
-  addButton: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  addButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  loadingText: {
-    textAlign: 'center',
-    marginTop: 20,
-    color: '#666',
-  },
-  emptyState: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyText: {
-    color: '#9ca3af',
-    fontSize: 16,
-    marginBottom: 16,
-  },
-  startButton: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 12,
-    padding: 16,
-  },
-  startButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  categoryCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  categoryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  icon: {
-    fontSize: 24,
-  },
-  categoryInfo: {
-    flex: 1,
-  },
-  categoryName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  categorySpent: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginTop: 2,
-  },
-  categoryLimit: {
-    alignItems: 'flex-end',
-  },
-  limitText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1f2937',
-  },
-  remainingText: {
-    fontSize: 12,
-    color: '#10b981',
-    marginTop: 2,
-  },
-  overBudget: {
-    color: '#ef4444',
-  },
-  progressBarContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  progressBarBackground: {
-    flex: 1,
-    height: 8,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  percentageText: {
-    fontSize: 12,
-    fontWeight: '600',
-    minWidth: 40,
-    textAlign: 'right',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modal: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 24,
-    width: '80%',
-    maxWidth: 320,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 20,
-  },
-  modalInput: {
-    marginBottom: 16,
-  },
-  modalLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  textInput: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#f3f4f6',
-  },
-  cancelButtonText: {
-    color: '#6b7280',
-    fontWeight: '600',
-  },
-  confirmButton: {
-    backgroundColor: '#3b82f6',
-  },
-  confirmButtonText: {
-    color: 'white',
-    fontWeight: '600',
-  },
+  card: { marginBottom: 10, backgroundColor: colors.surface },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  icon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  bold: { fontWeight: '700' },
+  muted: { color: colors.muted, fontSize: 12 },
+  input: { marginBottom: 8 },
+  suggest: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 6 },
 });
