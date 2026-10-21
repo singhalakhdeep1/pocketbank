@@ -130,8 +130,11 @@ splitBillsRouter.post('/split-bills/:id/settle', idempotent, async (req, res) =>
     category: 'Other',
     counterpartyOut: maskName(creator.firstName, creator.lastName),
     counterpartyIn: maskName(payer.firstName, payer.lastName),
+    extra: async (tx) => {
+      const claimed = await tx.splitParticipant.updateMany({ where: { id: share.id, paid: false }, data: { paid: true, paidAt: new Date() } });
+      if (claimed.count === 0) throw conflict('Your share is already settled');
+    },
   });
-  await prisma.splitParticipant.update({ where: { id: share.id }, data: { paid: true, paidAt: new Date() } });
   const updated = await settleIfDone(split.id);
   void notify(split.creatorId, 'split', `${maskName(payer.firstName, payer.lastName)} paid their share`, `${Number(share.amount).toFixed(2)} for "${split.title}"`, { splitBillId: split.id });
   res.json(serialize.split(updated, uid));

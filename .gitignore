@@ -2,6 +2,7 @@ node_modules/
 dist-web/
 .expo/web/
 backend/uploads/
+backend/dist/
 *.env
 .env.*
 !.env.example

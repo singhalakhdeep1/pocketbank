@@ -162,18 +162,23 @@ investmentsRouter.post('/investments/trades', rateLimit('trade', { capacity: 30,
       merchant: inst.name,
     },
     async (tx) => {
+      // Re-read the holding under a row lock: the pre-check above is only a fast path.
+      await tx.$queryRaw`SELECT id FROM "Holding" WHERE "userId" = ${uid} AND "symbol" = ${inst.symbol} FOR UPDATE`;
+      const current = await tx.holding.findUnique({ where: { userId_symbol: { userId: uid, symbol: inst.symbol } } });
       if (input.side === 'BUY') {
-        if (holding) {
-          const newQty = holding.quantity.plus(quantity);
-          const avg = holding.avgPrice.mul(holding.quantity).plus(total).div(newQty);
-          await tx.holding.update({ where: { id: holding.id }, data: { quantity: newQty, avgPrice: avg.toDecimalPlaces(6) } });
+        if (current) {
+          const newQty = current.quantity.plus(quantity);
+          const avg = current.avgPrice.mul(current.quantity).plus(total).div(newQty);
+          await tx.holding.update({ where: { id: current.id }, data: { quantity: newQty, avgPrice: avg.toDecimalPlaces(6) } });
         } else {
           await tx.holding.create({ data: { userId: uid, symbol: inst.symbol, name: inst.name, assetType: inst.assetType, quantity, avgPrice: q.price } });
         }
-      } else if (holding) {
-        const left = holding.quantity.minus(quantity);
-        if (left.lte(0)) await tx.holding.delete({ where: { id: holding.id } });
-        else await tx.holding.update({ where: { id: holding.id }, data: { quantity: left } });
+      } else {
+        if (!current || current.quantity.lt(quantity)) throw unprocessable('INSUFFICIENT_HOLDINGS', 'You do not own that many units');
+        realizedGain = toMoney(dec(q.price).minus(current.avgPrice).mul(quantity));
+        const left = current.quantity.minus(quantity);
+        if (left.lte(0)) await tx.holding.delete({ where: { id: current.id } });
+        else await tx.holding.update({ where: { id: current.id }, data: { quantity: left } });
       }
       await tx.trade.create({
         data: { userId: uid, accountId: account.id, symbol: inst.symbol, assetType: inst.assetType, side: input.side, quantity, price: q.price, total, realizedGain, priceSource: q.source },

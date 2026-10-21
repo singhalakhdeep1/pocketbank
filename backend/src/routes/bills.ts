@@ -34,10 +34,12 @@ export async function payBill(bill: Bill, account: Account) {
     bill.amount,
     { kind: 'BILL_PAYMENT', description: `${bill.name} · ${bill.payee}`, merchant: bill.payee, category: LEDGER_CATEGORY[bill.category] ?? 'Bills', counterparty: bill.payee },
     async (tx) => {
-      await tx.bill.update({
-        where: { id: bill.id },
+      // Conditional claim inside the ledger transaction so concurrent payments of the same due date charge once.
+      const claimed = await tx.bill.updateMany({
+        where: { id: bill.id, dueDate: bill.dueDate, status: { not: 'PAID' } },
         data: next ? { dueDate: next, status: 'PENDING', lastPaidAt: new Date(), reminderSentFor: null } : { status: 'PAID', lastPaidAt: new Date() },
       });
+      if (claimed.count === 0) throw conflict('Bill is already paid');
     },
   );
   return leg;

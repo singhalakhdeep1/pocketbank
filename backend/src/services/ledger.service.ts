@@ -105,6 +105,8 @@ export interface TransferInput {
   notes?: string | null;
   counterpartyOut?: string;
   counterpartyIn?: string;
+  /** Runs inside the posting transaction; throwing rolls back both legs. */
+  extra?: (tx: TxClient) => Promise<void>;
 }
 
 /** Move money between two accounts (own or another customer's), converting currency if needed. */
@@ -136,6 +138,7 @@ export async function transfer(input: TransferInput) {
       reference,
       fxRate: fx === 1 ? null : fx,
     });
+    if (input.extra) await input.extra(tx);
     return [outLeg, inLeg] as const;
   });
 
